@@ -356,7 +356,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Crear el trigger BEFORE INSERT
+-- Crear el trigger BEFORE Update
 CREATE OR REPLACE TRIGGER trg_check_capacity
 BEFORE UPDATE ON reservations
 FOR EACH ROW
