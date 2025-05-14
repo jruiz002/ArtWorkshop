@@ -1,3 +1,102 @@
+-- NOTA:Ejecutar la función de multiples parametros primero para observar resultados en las otras funciones.
+
+-- Funciones:
+-- 1. Función que retorna un valor escalar
+CREATE OR REPLACE FUNCTION get_user_reservation_count(p_user_id INTEGER)
+RETURNS INTEGER
+LANGUAGE plpgsql AS
+$$
+DECLARE
+    v_count INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO v_count
+    FROM reservations
+    WHERE user_id = p_user_id;
+    
+    RETURN v_count;
+END;
+$$;
+-- Uso:
+SELECT get_user_reservation_count(42);
+
+-- 2. Función que retorna un conjunto de resultados
+CREATE OR REPLACE FUNCTION get_user_workshops(p_user_id INTEGER)
+RETURNS TABLE (
+    workshop_id    INTEGER,
+    title          VARCHAR,
+    date           DATE,
+    reservation_status VARCHAR
+)
+LANGUAGE plpgsql AS
+$$
+BEGIN
+    RETURN QUERY
+    SELECT
+        w.workshop_id,
+        w.title,
+        w.date,
+        r.status
+    FROM workshops w
+    JOIN reservations r ON r.workshop_id = w.workshop_id
+    WHERE r.user_id = p_user_id
+    ORDER BY w.date;
+END;
+$$;
+-- Uso:
+SELECT * 
+FROM get_user_workshops(42);
+
+-- 3. Función con múltiples parámetros y lógica condicional
+CREATE OR REPLACE FUNCTION make_reservation(
+    p_user_id      INTEGER,
+    p_workshop_id  INTEGER,
+    OUT result_msg TEXT
+)
+RETURNS TEXT
+LANGUAGE plpgsql AS
+$$
+DECLARE
+    v_current_reservations INTEGER;
+    v_capacity             INTEGER;
+BEGIN
+    -- Verificar que no exista ya la reserva
+    IF EXISTS (
+        SELECT 1
+        FROM reservations
+        WHERE user_id = p_user_id
+          AND workshop_id = p_workshop_id
+    ) THEN
+        result_msg := 'Error: ya existe una reserva para este taller.';
+        RETURN;
+    END IF;
+
+    -- Comprobar capacidad del taller
+    SELECT capacity INTO v_capacity
+    FROM workshops
+    WHERE workshop_id = p_workshop_id;
+
+    SELECT COUNT(*) INTO v_current_reservations
+    FROM reservations
+    WHERE workshop_id = p_workshop_id
+      AND status = 'confirmed';
+
+    IF v_current_reservations >= v_capacity THEN
+        result_msg := 'Error: el taller ya está lleno.';
+        RETURN;
+    END IF;
+
+    -- Insertar la reserva en estado 'pending'
+    INSERT INTO reservations (user_id, workshop_id, status)
+    VALUES (p_user_id, p_workshop_id, 'pending');
+
+    result_msg := 'Reserva creada con éxito en estado pending.';
+    RETURN;
+END;
+$$;
+-- Uso:
+SELECT make_reservation(42, 10);
+
+--Procedimientos:
 -- 1) Procedimiento para inserciones complejas
 CREATE OR REPLACE PROCEDURE create_complex_reservation(
     IN  p_user_email     TEXT,
@@ -140,3 +239,92 @@ CALL manage_reservation( 10, 'cancelled', FALSE );
 
 -- 2c) Eliminar una reserva pendiente:
 CALL manage_reservation( 12, NULL, TRUE );
+
+-- Vistas:
+-- 1. Vista simple
+CREATE OR REPLACE VIEW vw_users_basic AS
+SELECT
+    user_id,
+    full_name,
+    email,
+    phone
+FROM users;
+-- Uso:
+SELECT * FROM vw_users_basic;
+
+-- 2. Vista con JOIN y GROUP BY
+CREATE OR REPLACE VIEW vw_workshop_reservation_counts AS
+SELECT
+    w.workshop_id,
+    w.title,
+    COUNT(r.reservation_id) AS confirmed_reservations
+FROM workshops w
+LEFT JOIN reservations r
+  ON r.workshop_id = w.workshop_id
+  AND r.status = 'confirmed'
+GROUP BY
+    w.workshop_id,
+    w.title
+ORDER BY
+    confirmed_reservations DESC;
+-- Uso:
+SELECT * 
+FROM vw_workshop_reservation_counts;
+
+-- 3. Vista con expresiones (CASE, COALESCE)
+CREATE OR REPLACE VIEW vw_workshop_capacity_status AS
+SELECT
+    w.workshop_id,
+    w.title,
+    w.capacity,
+    COALESCE(cnt.confirmed, 0) AS confirmed_reservations,
+    -- Ratio de ocupación
+    ROUND(
+      COALESCE(cnt.confirmed, 0)::NUMERIC
+      / NULLIF(w.capacity, 0)
+      * 100
+    , 2) AS occupancy_pct,
+    -- Clasificación según ocupación
+    CASE
+      WHEN COALESCE(cnt.confirmed, 0) >= w.capacity THEN 'Full'
+      WHEN COALESCE(cnt.confirmed, 0)::NUMERIC / w.capacity > 0.8 THEN 'Almost Full'
+      ELSE 'Available'
+    END AS status
+FROM workshops w
+LEFT JOIN (
+    SELECT
+      workshop_id,
+      COUNT(*) AS confirmed
+    FROM reservations
+    WHERE status = 'confirmed'
+    GROUP BY workshop_id
+) AS cnt USING (workshop_id);
+-- Uso:
+SELECT * 
+FROM vw_workshop_capacity_status
+WHERE status <> 'Available';
+
+-- 4.Vista combinada de varias tablas
+CREATE OR REPLACE VIEW vw_reservation_details AS
+SELECT
+    r.reservation_id,
+    r.reservation_date,
+    r.status,
+    u.user_id,
+    u.full_name   AS user_name,
+    u.email       AS user_email,
+    w.workshop_id,
+    w.title       AS workshop_title,
+    w.date        AS workshop_date,
+    i.instructor_id,
+    i.full_name   AS instructor_name,
+    i.email       AS instructor_email
+FROM reservations r
+JOIN users u ON u.user_id = r.user_id
+JOIN workshops w ON w.workshop_id = r.workshop_id
+LEFT JOIN instructors i ON i.instructor_id = w.instructor_id;
+-- Uso:
+SELECT *
+FROM vw_reservation_details
+WHERE status = 'confirmed'
+ORDER BY reservation_date DESC;
