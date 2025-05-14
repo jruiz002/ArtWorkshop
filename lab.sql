@@ -156,16 +156,16 @@ $$
 LANGUAGE plpgsql;
 
 CALL create_complex_reservation(
-  'ana.lopez@example.com',
+  'geadrwerwwdo@example.com',
   'Ana López',
   '555-1234',
-  2,
+  25,
   NULL
 );
 
 -- Aqui validamos que se haya insertado correctamente la reservacion
 SELECT * FROM reservations;
-
+SELECT * FROM workshops;
 
 -- 2) Procedimiento para UPDATE o DELETE con validaciones
 CREATE OR REPLACE PROCEDURE manage_reservation(
@@ -232,7 +232,7 @@ LANGUAGE plpgsql;
 SELECT * FROM reservations;
 
 -- 2a) Confirmar una reserva:
-CALL manage_reservation( 1, 'confirmed', FALSE );
+CALL manage_reservation( 58, 'confirmed', FALSE );
 
 -- 2b) Cancelar una reserva:
 CALL manage_reservation( 10, 'cancelled', FALSE );
@@ -328,3 +328,56 @@ SELECT *
 FROM vw_reservation_details
 WHERE status = 'confirmed'
 ORDER BY reservation_date DESC;
+
+-- Triggers:
+-- Función del trigger BEFORE
+CREATE OR REPLACE FUNCTION check_workshop_capacity()
+RETURNS TRIGGER AS $$
+DECLARE
+    current_count INT;
+    max_capacity INT;
+BEGIN
+    -- Solo validar si se va a insertar como 'confirmed'
+    IF NEW.status = 'confirmed' THEN
+        SELECT COUNT(*) INTO current_count
+        FROM reservations
+        WHERE workshop_id = NEW.workshop_id AND status = 'confirmed';
+
+        SELECT capacity INTO max_capacity
+        FROM workshops
+        WHERE workshop_id = NEW.workshop_id;
+
+        IF current_count >= max_capacity THEN
+            RAISE EXCEPTION 'No se puede reservar: el taller ya está lleno.';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Crear el trigger BEFORE INSERT
+CREATE OR REPLACE TRIGGER trg_check_capacity
+BEFORE UPDATE ON reservations
+FOR EACH ROW
+EXECUTE FUNCTION check_workshop_capacity();
+
+
+-- Función del trigger AFTER 
+CREATE OR REPLACE FUNCTION notify_reservation_created()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE NOTICE 'Se ha creado una reserva con ID: % para el taller %', NEW.reservation_id, NEW.workshop_id;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Crear el trigger AFTER INSERT
+CREATE TRIGGER trg_notify_reservation_created
+AFTER INSERT ON reservations
+FOR EACH ROW
+EXECUTE FUNCTION notify_reservation_created();
+
+INSERT INTO reservations(user_id, workshop_id, reservation_date, status, attended)
+VALUES (2, 2, '2025-05-13 10:00:00', 'confirmed', TRUE);
+
